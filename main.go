@@ -11,7 +11,7 @@ import (
 
 var addr = flag.String("addr", ":8123", "hashbrown service address")
 
-var validHashId = regexp.MustCompile(`^/hash/([0-9]+)$`)
+var validHashId = regexp.MustCompile(`^/hash/([1-9]+[0-9]*)$`)
 
 func main() {
   flag.Parse()
