@@ -1,12 +1,12 @@
 package main
 
 import (
-  "crypto/sha256"
+  "crypto/sha512"
   "encoding/base64"
 )
 
 func computeHash(payload string) []byte {
-  sum := sha256.Sum256([]byte(payload))
+  sum := sha512.Sum512([]byte(payload))
   ret := sum[:]
 
   return ret
