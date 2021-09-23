@@ -7,6 +7,7 @@ import (
   "net/http"
   "regexp"
   "strconv"
+  "hashbrown/datastore"
 )
 
 var addr = flag.String("addr", ":8123", "hashbrown service address")
@@ -41,9 +42,10 @@ func getHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "GET" {
     if hashId := validHashId.FindStringSubmatch(req.URL.Path); hashId != nil {
       if uintHashId, err := strconv.ParseUint(hashId[1], 10, 32); err == nil {
-        if entry, ok := getHash(uint64(uintHashId)); ok == true {
-          b64hash := encodeHash(entry.hash)
-          fmt.Fprintf(w, "getting hash for id: %d, %q", uintHashId, b64hash)
+        if entry, ok := datastore.GetHash(uint64(uintHashId)); ok == true {
+          b64hash := encodeHash(entry.Hash)
+          w.Header().Add("Content-Type", "application/json")
+          fmt.Fprintf(w, "{\"hashId\": %d, \"hash\": %q}\n", uintHashId, b64hash)
           return
         }
         http.Error(w, "Hash Not Found", 404)
@@ -58,8 +60,10 @@ func postHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "POST" {
     if payload := req.PostFormValue("password"); payload != "" {
       computedHash := computeHash(payload)
-      hashId := storeHash(computedHash)
-      fmt.Fprintf(w, "posting hash: %d", hashId)
+      hashId := datastore.PutHash(computedHash)
+
+      w.Header().Add("Content-Type", "application/json")
+      fmt.Fprintf(w, "{\"hashId\": %d}\n", hashId)
       return
     }
   }
@@ -69,7 +73,8 @@ func postHashHandler(w http.ResponseWriter, req *http.Request) {
 func statsHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "GET" {
     w.Header().Add("Content-Type", "application/json")
-    fmt.Fprintf(w, "%q", getStatsJSON())
+    total, avg := datastore.GetStats()
+    fmt.Fprintf(w, "{\"total\": %d,\"average\": %d}\n", total, avg)
     return
   }
   http.Error(w, "Bad Request", 400)
@@ -77,7 +82,7 @@ func statsHandler(w http.ResponseWriter, req *http.Request) {
 
 func shutdownHandler(w http.ResponseWriter, req *http.Request, quit chan bool) {
   if req.Method == "POST" {
-    fmt.Fprintf(w, "Shutting down the server.")
+    fmt.Fprintf(w, "Shutting down the server.\n")
     quit <- true
     return
   }
