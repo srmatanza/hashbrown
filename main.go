@@ -41,7 +41,12 @@ func getHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "GET" {
     if hashId := validHashId.FindStringSubmatch(req.URL.Path); hashId != nil {
       if uintHashId, err := strconv.ParseUint(hashId[1], 10, 32); err == nil {
-        fmt.Fprintf(w, "getting hash for id: %d", uintHashId)
+        if entry, ok := getHash(uint64(uintHashId)); ok == true {
+          b64hash := encodeHash(entry.hash)
+          fmt.Fprintf(w, "getting hash for id: %d, %q", uintHashId, b64hash)
+          return
+        }
+        http.Error(w, "Hash Not Found", 404)
         return
       }
     }
@@ -52,7 +57,9 @@ func getHashHandler(w http.ResponseWriter, req *http.Request) {
 func postHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "POST" {
     if payload := req.PostFormValue("password"); payload != "" {
-      fmt.Fprintf(w, "posting hash for: %q", payload)
+      computedHash := computeHash(payload)
+      hashId := storeHash(computedHash)
+      fmt.Fprintf(w, "posting hash: %d", hashId)
       return
     }
   }
@@ -61,7 +68,8 @@ func postHashHandler(w http.ResponseWriter, req *http.Request) {
 
 func statsHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "GET" {
-    fmt.Fprintf(w, "Here's yer stats. %q", req.Method)
+    w.Header().Add("Content-Type", "application/json")
+    fmt.Fprintf(w, "%q", getStatsJSON())
     return
   }
   http.Error(w, "Bad Request", 400)
