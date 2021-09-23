@@ -32,7 +32,6 @@ func statsHandler(completed chan bool) {
   for dt := range statsQueue {
       availableHashCount++
       currentAvg = (currentAvg*time.Duration(availableHashCount-1) + dt) / time.Duration(availableHashCount)
-      // log.Printf("statsHandler; updating the currentAvg %v, %v", currentAvg, dt)
   }
   log.Print("statsHandler is now done")
   completed <- true
@@ -45,6 +44,7 @@ func hashHandler(completed chan bool) {
       hashCount++
       inmemHashStore[hashCount] = HashEntry{hashCount, uint16(len(req.hash)), req.hash}
       req := req
+      // Send back the id, and then make the hash available after five seconds
       go func() {
         req.resp <- &HashEntry{Id:hashCount}
         time.Sleep(5*time.Second)

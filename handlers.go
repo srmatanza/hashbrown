@@ -1,7 +1,6 @@
 package main
 
 import (
-  "log"
   "fmt"
   "time"
   "regexp"
@@ -33,15 +32,18 @@ func getHashHandler(w http.ResponseWriter, req *http.Request) {
 func postHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "POST" {
     if payload := req.PostFormValue("password"); payload != "" {
-      start := time.Now()
-      computedHash := computeHash(payload)
-      tdelta := time.Now().Sub(start)
 
-      hashId := datastore.PutHash(computedHash, tdelta)
-      log.Printf("Computed hash for %d in %v", hashId, tdelta)
+      w := w
+      go func() {
+        start := time.Now()
+        computedHash := computeHash(payload)
+        tdelta := time.Now().Sub(start)
 
-      w.Header().Add("Content-Type", "application/json")
-      fmt.Fprintf(w, "{\"id\": %d}\n", hashId)
+        hashId := datastore.PutHash(computedHash, tdelta)
+
+        w.Header().Add("Content-Type", "application/json")
+        fmt.Fprintf(w, "{\"id\": %d}\n", hashId)
+      }()
       return
     }
   }
