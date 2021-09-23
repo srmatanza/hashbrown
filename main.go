@@ -27,11 +27,6 @@ func main() {
   }
 }
 
-func badRequestHandler(w http.ResponseWriter, req *http.Request) {
-  w.WriteHeader(404)
-  fmt.Fprintf(w, "Bad Request")
-}
-
 func getHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "GET" {
     if hashId := validHashId.FindStringSubmatch(req.URL.Path); hashId != nil {
@@ -41,7 +36,7 @@ func getHashHandler(w http.ResponseWriter, req *http.Request) {
       }
     }
   }
-  badRequestHandler(w, req)
+  http.Error(w, "Bad Request", 400)
 }
 
 func postHashHandler(w http.ResponseWriter, req *http.Request) {
@@ -51,7 +46,7 @@ func postHashHandler(w http.ResponseWriter, req *http.Request) {
       return
     }
   }
-  badRequestHandler(w, req)
+  http.Error(w, "Bad Request", 400)
 }
 
 func statsHandler(w http.ResponseWriter, req *http.Request) {
@@ -59,7 +54,7 @@ func statsHandler(w http.ResponseWriter, req *http.Request) {
     fmt.Fprintf(w, "Here's yer stats. %q", req.Method)
     return
   }
-  badRequestHandler(w, req)
+  http.Error(w, "Bad Request", 400)
 }
 
 func shutdownHandler(w http.ResponseWriter, req *http.Request) {
@@ -67,6 +62,6 @@ func shutdownHandler(w http.ResponseWriter, req *http.Request) {
     fmt.Fprintf(w, "Shutting down the server.")
     return
   }
-  badRequestHandler(w, req)
+  http.Error(w, "Bad Request", 400)
 }
 
