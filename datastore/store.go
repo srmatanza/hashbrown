@@ -72,6 +72,7 @@ func hashWorker(jobs <-chan hashRequest, result chan<- dbRequest, done chan<- bo
     <-resp
   }
   done<-true
+  log.Print("hashWorker is now done")
 }
 
 // hashHandler will run from a single goroutine and handle updates to inmemHashStore and hashCount
@@ -120,6 +121,7 @@ func Initialize() bool {
 
   poolsize = 10
   hashQueue = make(chan hashRequest, 40)
+  hashQueueDone = make(chan bool)
 
   for i:=0; i<poolsize; i++ {
     go hashWorker(hashQueue, dbQueue, hashQueueDone)
@@ -135,9 +137,13 @@ func Shutdown() bool {
     <-dbQueueDone
     close(dbQueueDone)
 
+    log.Print("Closing hashQueue")
+    close(hashQueue)
     for i:=0; i<poolsize; i++ {
+      log.Print("Waiting for hashQueueDone...")
       <-hashQueueDone
     }
+    close(hashQueueDone)
     alreadyInitialized = false
     return true
   }
