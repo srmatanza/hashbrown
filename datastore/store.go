@@ -3,6 +3,9 @@ package datastore
 import (
   "log"
   "time"
+  "sync"
+  "sync/atomic"
+  "crypto/sha512"
 )
 
 type HashEntry struct {
@@ -11,7 +14,7 @@ type HashEntry struct {
   Hash []byte
 }
 
-type hashRequest struct {
+type dbRequest struct {
   storing bool
   id uint64
   hash []byte
@@ -19,77 +22,122 @@ type hashRequest struct {
   resp chan *HashEntry
 }
 
+type hashRequest struct {
+  id uint64
+  payload string
+}
+
+func computeHash(payload string) ([]byte, time.Duration) {
+  start := time.Now()
+  sum := sha512.Sum512([]byte(payload))
+  delta := start.Sub(start)
+  ret := sum[:]
+
+  return ret, delta
+}
+
 var inmemHashStore = make(map[uint64]HashEntry)
-var queue chan hashRequest
-var statsQueue chan time.Duration
 
 var hashCount uint64 = 0
 var availableHashCount uint64 = 0
 var currentAvg time.Duration = 0
 
-// statsHandler will run from a single goroutine and handle updates to availableHashCount and currentAvg
-func statsHandler(completed chan bool) {
-  for dt := range statsQueue {
-      availableHashCount++
-      currentAvg = (currentAvg*time.Duration(availableHashCount-1) + dt) / time.Duration(availableHashCount)
+var mAvailableHashLock = &sync.Mutex{}
+var mMapLock = &sync.Mutex{}
+
+// Because we only synchronize writing to availableHashCount and currentAvg, there is a small
+// possibility that data could be read while we're in this critical section. However, because
+// the overall effect on the output would be minimal, it's probably not worth the performance
+// overhead of synchronizing reads to these values in GetStats
+func updateAvailableHashes(dt time.Duration) {
+  time.Sleep(5*time.Second)
+  ahc := atomic.AddUint64(&availableHashCount, 1)
+  mAvailableHashLock.Lock()
+  currentAvg = (currentAvg*time.Duration(ahc-1) + dt) / time.Duration(ahc)
+  mAvailableHashLock.Unlock()
+}
+
+// GetStats reads willy-nilly from availableHashCount and currentAvg which are synchronized
+// when they are being written to.
+func GetStats() (uint64, time.Duration) {
+  return availableHashCount, currentAvg
+}
+
+// hashWorker is poolable. Create as many of these as we need to compute our hashes quickly in parallel
+func hashWorker(jobs <-chan hashRequest, result chan<- dbRequest, done chan<- bool) {
+  for req := range jobs {
+    resp := make(chan *HashEntry)
+    hash, tdelta := computeHash(req.payload)
+    result <- dbRequest{storing: true, id: req.id, hash: hash, tdelta: tdelta, resp: resp}
+    <-resp
   }
-  log.Print("statsHandler is now done")
-  completed <- true
+  done<-true
 }
 
 // hashHandler will run from a single goroutine and handle updates to inmemHashStore and hashCount
-func hashHandler(completed chan bool) {
-  for req := range queue {
+func hashHandler(jobs <-chan dbRequest, done chan<- bool) {
+  for req := range jobs {
     if req.storing {
-      hashCount++
-      inmemHashStore[hashCount] = HashEntry{hashCount, uint16(len(req.hash)), req.hash}
-      req := req
-      // Send back the id, and then make the hash available after five seconds
-      go func() {
-        req.resp <- &HashEntry{Id:hashCount}
-        time.Sleep(5*time.Second)
-        statsQueue <- req.tdelta
-      }()
+      req.resp <- nil
+      inmemHashStore[req.id] = HashEntry{hashCount, uint16(len(req.hash)), req.hash}
+      // go updateAvailableHashes(req.tdelta)
     } else {
       if req.id <= availableHashCount {
-        if hash, ok := inmemHashStore[req.id]; ok == true {
-          req := req
-          go func() { req.resp <- &hash }()
+        hash, ok := inmemHashStore[req.id]
+        if ok {
+          req.resp <- &hash
           continue
         }
       }
-      req := req
-      go func() { req.resp <- nil }()
+      req.resp <- nil
     }
   }
-  log.Print("hashHandler is now done")
-  completed <- true
+  done<-true
+  log.Print("HashHandler is now done")
 }
 
 var alreadyInitialized = false
 
-var cCompleted chan bool
+var hashQueue chan hashRequest
+var hashQueueDone chan bool
+
+var dbQueue chan dbRequest
+var dbQueueDone chan bool
+
+var poolsize int
+
 func Initialize() bool {
   if alreadyInitialized {
     log.Print("Warning; datastore.Initialize: The datastore has already been initialized")
     return false
   }
   alreadyInitialized = true
-  cCompleted = make(chan bool)
-  queue = make(chan hashRequest)
-  go hashHandler(cCompleted)
-  statsQueue = make(chan time.Duration)
-  go statsHandler(cCompleted)
+
+  dbQueue = make(chan dbRequest, 10)
+  dbQueueDone = make(chan bool)
+
+  go hashHandler(dbQueue, dbQueueDone)
+
+  poolsize = 10
+  hashQueue = make(chan hashRequest, 40)
+
+  for i:=0; i<poolsize; i++ {
+    go hashWorker(hashQueue, dbQueue, hashQueueDone)
+  }
+
   return true
 }
 
 func Shutdown() bool {
   if alreadyInitialized {
     log.Print("Closing queues for datastore")
-    close(queue)
-    close(statsQueue)
-    <-cCompleted
-    <-cCompleted
+    close(dbQueue)
+    <-dbQueueDone
+    close(dbQueueDone)
+
+    for i:=0; i<poolsize; i++ {
+      <-hashQueueDone
+    }
     alreadyInitialized = false
     return true
   }
@@ -97,27 +145,20 @@ func Shutdown() bool {
   return false
 }
 
-func PutHash(hash []byte, tdelta time.Duration) uint64 {
-  resp := make(chan *HashEntry)
-  queue <- hashRequest{storing: true, hash:hash, tdelta: tdelta, resp: resp}
-  if entry := <-resp; entry != nil {
-    // log.Printf("Storing hash entry %d", entry.Id)
-    return entry.Id
-  }
-
-  return 0
+// PutHash will generate a hash for the given payload in the background
+// and store it in the database. This function will immediately return with the id
+// that will be assigned to the hash.
+func PutHash(payload string) uint64 {
+  hashId := atomic.AddUint64(&hashCount, 1)
+  go func() { hashQueue <- hashRequest{hashId, payload} }()
+  return hashId
 }
 
 func GetHash(id uint64) (HashEntry, bool) {
   resp := make(chan *HashEntry)
-  queue <- hashRequest{storing: false, id: id, resp: resp}
+  dbQueue <- dbRequest{storing: false, id: id, resp: resp}
   if hash := <-resp; hash != nil {
     return *hash, true
   }
   return HashEntry{}, false
 }
-
-func GetStats() (uint64, time.Duration) {
-  return availableHashCount, currentAvg
-}
-

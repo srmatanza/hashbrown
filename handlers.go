@@ -2,7 +2,6 @@ package main
 
 import (
   "fmt"
-  "time"
   "regexp"
   "strconv"
   "net/http"
@@ -33,17 +32,9 @@ func postHashHandler(w http.ResponseWriter, req *http.Request) {
   if req.Method == "POST" {
     if payload := req.PostFormValue("password"); payload != "" {
 
-      w := w
-      go func() {
-        start := time.Now()
-        computedHash := computeHash(payload)
-        tdelta := time.Now().Sub(start)
-
-        hashId := datastore.PutHash(computedHash, tdelta)
-
-        w.Header().Add("Content-Type", "application/json")
-        fmt.Fprintf(w, "{\"id\": %d}\n", hashId)
-      }()
+      hashId := datastore.PutHash(payload)
+      w.Header().Add("Content-Type", "application/json")
+      fmt.Fprintf(w, "{\"id\": %d}\n", hashId)
       return
     }
   }
@@ -68,4 +59,3 @@ func shutdownHandler(w http.ResponseWriter, req *http.Request, quit chan bool) {
   }
   http.Error(w, "Bad Request", 400)
 }
-
