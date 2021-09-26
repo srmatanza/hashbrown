@@ -80,7 +80,7 @@ func hashHandler(jobs <-chan dbRequest, done chan<- bool) {
     if req.storing {
       req.resp <- nil
       inmemHashStore[req.id] = HashEntry{hashCount, uint16(len(req.hash)), req.hash}
-      // go updateAvailableHashes(req.tdelta)
+      go updateAvailableHashes(req.tdelta)
     } else {
       if req.id <= availableHashCount {
         hash, ok := inmemHashStore[req.id]
