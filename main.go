@@ -11,7 +11,7 @@ func main() {
   flag.Parse()
 
   s := NewServer(*addr)
-  s.db = datastore.NewHashStore()
+  s.db = datastore.NewPoolStore()
 
   go s.Serve()
   s.WaitForQuit()

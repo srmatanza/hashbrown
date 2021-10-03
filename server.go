@@ -25,7 +25,7 @@ func NewServer(addr string) *server {
   s := &server{addr: addr}
   s.router = &Router{}
   s.routes()
-  s.quit = make(chan bool)
+  s.quit = make(chan bool, 1)
   return s
 }
 

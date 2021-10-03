@@ -27,7 +27,7 @@ type hashRequest struct {
   payload string
 }
 
-type HashStore struct {
+type PoolStore struct {
   inmemHashStore map[uint64]HashEntry
   hashCount uint64
   availableHashCount uint64
@@ -59,7 +59,7 @@ func computeHash(payload string) ([]byte, time.Duration) {
 // possibility that data could be read while we're in this critical section. However, because
 // the overall effect on the output would be minimal, it's probably not worth the performance
 // overhead of synchronizing reads to these values in GetStats
-func (hs *HashStore) updateAvailableHashes(dt time.Duration) {
+func (hs *PoolStore) updateAvailableHashes(dt time.Duration) {
   time.Sleep(5*time.Second)
   ahc := atomic.AddUint64(&hs.availableHashCount, 1)
   hs.mAvailableHashLock.Lock()
@@ -69,7 +69,7 @@ func (hs *HashStore) updateAvailableHashes(dt time.Duration) {
 
 // GetStats reads willy-nilly from availableHashCount and currentAvg which are synchronized
 // when they are being written to.
-func (hs *HashStore) GetStats() (uint64, time.Duration) {
+func (hs *PoolStore) GetStats() (uint64, time.Duration) {
   return hs.availableHashCount, hs.currentAvg
 }
 
@@ -86,7 +86,7 @@ func hashWorker(jobs <-chan hashRequest, result chan<- dbRequest, done chan<- bo
 }
 
 // hashHandler will run from a single goroutine and handle updates to inmemHashStore and hashCount
-func (hs *HashStore) hashHandler(jobs <-chan dbRequest, done chan<- bool) {
+func (hs *PoolStore) hashHandler(jobs <-chan dbRequest, done chan<- bool) {
   for req := range jobs {
     if req.storing {
       req.resp <- nil
@@ -109,12 +109,12 @@ func (hs *HashStore) hashHandler(jobs <-chan dbRequest, done chan<- bool) {
 
 
 
-func NewHashStore() *HashStore {
-  hs := &HashStore{}
+func NewPoolStore() *PoolStore {
+  hs := &PoolStore{}
   hs.inmemHashStore = make(map[uint64]HashEntry)
 
   if hs.alreadyInitialized {
-    log.Print("Warning; datastore.Initialize: The datastore has already been initialized")
+    log.Print("Warning; The datastore has already been initialized")
     return nil
   }
   hs.alreadyInitialized = true
@@ -135,7 +135,7 @@ func NewHashStore() *HashStore {
   return hs
 }
 
-func (hs *HashStore) Shutdown() bool {
+func (hs *PoolStore) Shutdown() bool {
   if hs.alreadyInitialized {
     log.Print("Closing queues for datastore")
     close(hs.dbQueue)
@@ -152,20 +152,20 @@ func (hs *HashStore) Shutdown() bool {
     hs.alreadyInitialized = false
     return true
   }
-  log.Print("Warning; datastore.Shutdown: The datastore has not been initialized")
+  log.Print("Warning; The datastore has not been initialized")
   return false
 }
 
 // PutHash will generate a hash for the given payload in the background
 // and store it in the database. This function will immediately return with the id
 // that will be assigned to the hash.
-func (hs *HashStore) PutHash(payload string) uint64 {
+func (hs *PoolStore) PutHash(payload string) uint64 {
   hashId := atomic.AddUint64(&hs.hashCount, 1)
   go func() { hs.hashQueue <- hashRequest{hashId, payload} }()
   return hashId
 }
 
-func (hs *HashStore) GetHash(id uint64) (HashEntry, bool) {
+func (hs *PoolStore) GetHash(id uint64) (HashEntry, bool) {
   resp := make(chan *HashEntry)
   hs.dbQueue <- dbRequest{storing: false, id: id, resp: resp}
   if hash := <-resp; hash != nil {
