@@ -27,6 +27,25 @@ type hashRequest struct {
   payload string
 }
 
+type HashStore struct {
+  inmemHashStore map[uint64]HashEntry
+  hashCount uint64
+  availableHashCount uint64
+  currentAvg time.Duration
+
+  mAvailableHashLock sync.Mutex
+  mMapLock sync.Mutex
+
+  alreadyInitialized bool
+  hashQueue chan hashRequest
+  hashQueueDone chan bool
+
+  dbQueue chan dbRequest
+  dbQueueDone chan bool
+
+  poolsize int
+}
+
 func computeHash(payload string) ([]byte, time.Duration) {
   start := time.Now()
   sum := sha512.Sum512([]byte(payload))
@@ -36,31 +55,22 @@ func computeHash(payload string) ([]byte, time.Duration) {
   return ret, delta
 }
 
-var inmemHashStore = make(map[uint64]HashEntry)
-
-var hashCount uint64 = 0
-var availableHashCount uint64 = 0
-var currentAvg time.Duration = 0
-
-var mAvailableHashLock = &sync.Mutex{}
-var mMapLock = &sync.Mutex{}
-
 // Because we only synchronize writing to availableHashCount and currentAvg, there is a small
 // possibility that data could be read while we're in this critical section. However, because
 // the overall effect on the output would be minimal, it's probably not worth the performance
 // overhead of synchronizing reads to these values in GetStats
-func updateAvailableHashes(dt time.Duration) {
+func (hs *HashStore) updateAvailableHashes(dt time.Duration) {
   time.Sleep(5*time.Second)
-  ahc := atomic.AddUint64(&availableHashCount, 1)
-  mAvailableHashLock.Lock()
-  currentAvg = (currentAvg*time.Duration(ahc-1) + dt) / time.Duration(ahc)
-  mAvailableHashLock.Unlock()
+  ahc := atomic.AddUint64(&hs.availableHashCount, 1)
+  hs.mAvailableHashLock.Lock()
+  hs.currentAvg = (hs.currentAvg*time.Duration(ahc-1) + dt) / time.Duration(ahc)
+  hs.mAvailableHashLock.Unlock()
 }
 
 // GetStats reads willy-nilly from availableHashCount and currentAvg which are synchronized
 // when they are being written to.
-func GetStats() (uint64, time.Duration) {
-  return availableHashCount, currentAvg
+func (hs *HashStore) GetStats() (uint64, time.Duration) {
+  return hs.availableHashCount, hs.currentAvg
 }
 
 // hashWorker is poolable. Create as many of these as we need to compute our hashes quickly in parallel
@@ -76,15 +86,15 @@ func hashWorker(jobs <-chan hashRequest, result chan<- dbRequest, done chan<- bo
 }
 
 // hashHandler will run from a single goroutine and handle updates to inmemHashStore and hashCount
-func hashHandler(jobs <-chan dbRequest, done chan<- bool) {
+func (hs *HashStore) hashHandler(jobs <-chan dbRequest, done chan<- bool) {
   for req := range jobs {
     if req.storing {
       req.resp <- nil
-      inmemHashStore[req.id] = HashEntry{hashCount, uint16(len(req.hash)), req.hash}
-      go updateAvailableHashes(req.tdelta)
+      hs.inmemHashStore[req.id] = HashEntry{hs.hashCount, uint16(len(req.hash)), req.hash}
+      go hs.updateAvailableHashes(req.tdelta)
     } else {
-      if req.id <= availableHashCount {
-        hash, ok := inmemHashStore[req.id]
+      if req.id <= hs.availableHashCount {
+        hash, ok := hs.inmemHashStore[req.id]
         if ok {
           req.resp <- &hash
           continue
@@ -97,54 +107,49 @@ func hashHandler(jobs <-chan dbRequest, done chan<- bool) {
   log.Print("HashHandler is now done")
 }
 
-var alreadyInitialized = false
 
-var hashQueue chan hashRequest
-var hashQueueDone chan bool
 
-var dbQueue chan dbRequest
-var dbQueueDone chan bool
+func NewHashStore() *HashStore {
+  hs := &HashStore{}
+  hs.inmemHashStore = make(map[uint64]HashEntry)
 
-var poolsize int
-
-func Initialize() bool {
-  if alreadyInitialized {
+  if hs.alreadyInitialized {
     log.Print("Warning; datastore.Initialize: The datastore has already been initialized")
-    return false
+    return nil
   }
-  alreadyInitialized = true
+  hs.alreadyInitialized = true
 
-  dbQueue = make(chan dbRequest, 10)
-  dbQueueDone = make(chan bool)
+  hs.dbQueue = make(chan dbRequest, 10)
+  hs.dbQueueDone = make(chan bool)
 
-  go hashHandler(dbQueue, dbQueueDone)
+  go hs.hashHandler(hs.dbQueue, hs.dbQueueDone)
 
-  poolsize = 10
-  hashQueue = make(chan hashRequest, 40)
-  hashQueueDone = make(chan bool)
+  hs.poolsize = 10
+  hs.hashQueue = make(chan hashRequest, 40)
+  hs.hashQueueDone = make(chan bool)
 
-  for i:=0; i<poolsize; i++ {
-    go hashWorker(hashQueue, dbQueue, hashQueueDone)
+  for i:=0; i<hs.poolsize; i++ {
+    go hashWorker(hs.hashQueue, hs.dbQueue, hs.hashQueueDone)
   }
 
-  return true
+  return hs
 }
 
-func Shutdown() bool {
-  if alreadyInitialized {
+func (hs *HashStore) Shutdown() bool {
+  if hs.alreadyInitialized {
     log.Print("Closing queues for datastore")
-    close(dbQueue)
-    <-dbQueueDone
-    close(dbQueueDone)
+    close(hs.dbQueue)
+    <-hs.dbQueueDone
+    close(hs.dbQueueDone)
 
     log.Print("Closing hashQueue")
-    close(hashQueue)
-    for i:=0; i<poolsize; i++ {
+    close(hs.hashQueue)
+    for i:=0; i<hs.poolsize; i++ {
       log.Print("Waiting for hashQueueDone...")
-      <-hashQueueDone
+      <-hs.hashQueueDone
     }
-    close(hashQueueDone)
-    alreadyInitialized = false
+    close(hs.hashQueueDone)
+    hs.alreadyInitialized = false
     return true
   }
   log.Print("Warning; datastore.Shutdown: The datastore has not been initialized")
@@ -154,15 +159,15 @@ func Shutdown() bool {
 // PutHash will generate a hash for the given payload in the background
 // and store it in the database. This function will immediately return with the id
 // that will be assigned to the hash.
-func PutHash(payload string) uint64 {
-  hashId := atomic.AddUint64(&hashCount, 1)
-  go func() { hashQueue <- hashRequest{hashId, payload} }()
+func (hs *HashStore) PutHash(payload string) uint64 {
+  hashId := atomic.AddUint64(&hs.hashCount, 1)
+  go func() { hs.hashQueue <- hashRequest{hashId, payload} }()
   return hashId
 }
 
-func GetHash(id uint64) (HashEntry, bool) {
+func (hs *HashStore) GetHash(id uint64) (HashEntry, bool) {
   resp := make(chan *HashEntry)
-  dbQueue <- dbRequest{storing: false, id: id, resp: resp}
+  hs.dbQueue <- dbRequest{storing: false, id: id, resp: resp}
   if hash := <-resp; hash != nil {
     return *hash, true
   }

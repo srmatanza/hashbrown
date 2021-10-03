@@ -2,60 +2,50 @@ package main
 
 import (
   "fmt"
-  "regexp"
   "strconv"
   "net/http"
-  "hashbrown/datastore"
 )
 
-var validHashId = regexp.MustCompile(`^/hash/([1-9]+[0-9]*)$`)
+func (s *server) handleStatsGet() http.HandlerFunc {
+  return func(w http.ResponseWriter, req *http.Request) {
+    w.Header().Add("Content-Type", "application/json")
+    total, avg := s.db.GetStats()
+    fmt.Fprintf(w, "{\"total\": %d,\"average\": %d}\n", total, avg/1000)
+    return
+  }
+}
 
-func getHashHandler(w http.ResponseWriter, req *http.Request) {
-  if req.Method == "GET" {
-    if hashId := validHashId.FindStringSubmatch(req.URL.Path); hashId != nil {
-      if uintHashId, err := strconv.ParseUint(hashId[1], 10, 32); err == nil {
-        if entry, ok := datastore.GetHash(uint64(uintHashId)); ok == true {
-          b64hash := encodeHash(entry.Hash)
-          w.Header().Add("Content-Type", "application/json")
-          fmt.Fprintf(w, "{\"id\": %d, \"hash\": %q}\n", uintHashId, b64hash)
-          return
-        }
-        http.Error(w, "Hash Not Found", 404)
+func (s *server) handleHashGet() http.HandlerFunc {
+  return func(w http.ResponseWriter, req *http.Request) {
+    w.Header().Add("Content-Type", "application/json")
+    pathParams := req.Context().Value(ctxPathParams{}).([]string)
+    if uintHashId, err := strconv.ParseUint(pathParams[0], 10, 32); err == nil {
+      if entry, ok := s.db.GetHash(uintHashId); ok {
+        b64hash := encodeHash(entry.Hash)
+        w.Header().Add("Content-Type", "application/json")
+        fmt.Fprintf(w, "{\"id\": %d, \"hash\": %q}\n", uintHashId, b64hash)
         return
       }
     }
+    http.NotFound(w, req)
   }
-  http.Error(w, "Bad Request", 400)
 }
 
-func postHashHandler(w http.ResponseWriter, req *http.Request) {
-  if req.Method == "POST" {
+func (s *server) handleHashPost() http.HandlerFunc {
+  return func(w http.ResponseWriter, req *http.Request) {
     if payload := req.PostFormValue("password"); payload != "" {
-
-      hashId := datastore.PutHash(payload)
+      hashId := s.db.PutHash(payload)
       w.Header().Add("Content-Type", "application/json")
       fmt.Fprintf(w, "{\"id\": %d}\n", hashId)
       return
     }
+    http.Error(w, "Bad Request", 400)
   }
-  http.Error(w, "Bad Request", 400)
 }
 
-func statsHandler(w http.ResponseWriter, req *http.Request) {
-  if req.Method == "GET" {
-    w.Header().Add("Content-Type", "application/json")
-    total, avg := datastore.GetStats()
-    fmt.Fprintf(w, "{\"total\": %d,\"average\": %d}\n", total, avg/1000)
-    return
-  }
-  http.Error(w, "Bad Request", 400)
-}
-
-func shutdownHandler(w http.ResponseWriter, req *http.Request, quit chan bool) {
-  if req.Method == "POST" {
+func (s *server) handleShutdownPost() http.HandlerFunc {
+  return func(w http.ResponseWriter, req *http.Request) {
     fmt.Fprintf(w, "Shutting down the server.\n")
-    quit <- true
-    return
+    s.shutdown()
   }
-  http.Error(w, "Bad Request", 400)
 }
