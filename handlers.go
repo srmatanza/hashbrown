@@ -4,6 +4,7 @@ import (
   "fmt"
   "strconv"
   "net/http"
+  "encoding/base64"
 )
 
 func (s *server) handleStatsGet() http.HandlerFunc {
@@ -21,7 +22,7 @@ func (s *server) handleHashGet() http.HandlerFunc {
     pathParams := req.Context().Value(ctxPathParams{}).([]string)
     if uintHashId, err := strconv.ParseUint(pathParams[0], 10, 32); err == nil {
       if entry, ok := s.db.GetHash(uintHashId); ok {
-        b64hash := encodeHash(entry.Hash)
+        b64hash := base64.StdEncoding.EncodeToString(entry.Hash)
         w.Header().Add("Content-Type", "application/json")
         fmt.Fprintf(w, "{\"id\": %d, \"hash\": %q}\n", uintHashId, b64hash)
         return
