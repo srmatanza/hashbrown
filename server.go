@@ -26,12 +26,10 @@ func NewServer(addr string) *server {
   s.router = &Router{}
   s.routes()
   s.quit = make(chan bool)
-
-  s.db = datastore.NewHashStore()
   return s
 }
 
-func (s *server) shutdown() {
+func (s *server) Shutdown() {
   s.quit<-true
   s.db.Shutdown()
 }

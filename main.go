@@ -3,6 +3,7 @@ package main
 import (
   "flag"
   "log"
+  "hashbrown/datastore"
 )
 
 func main() {
@@ -10,6 +11,8 @@ func main() {
   flag.Parse()
 
   s := NewServer(*addr)
+  s.db = datastore.NewHashStore()
+
   go s.Serve()
   s.WaitForQuit()
 

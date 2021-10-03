@@ -47,6 +47,6 @@ func (s *server) handleHashPost() http.HandlerFunc {
 func (s *server) handleShutdownPost() http.HandlerFunc {
   return func(w http.ResponseWriter, req *http.Request) {
     fmt.Fprintf(w, "Shutting down the server.\n")
-    s.shutdown()
+    s.Shutdown()
   }
 }
